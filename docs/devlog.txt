@@ -1,0 +1,133 @@
+================================================================================
+BRUINPATH DEVLOG
+================================================================================
+
+--------------------------------------------------------------------------------
+DAY 1 — Project Scaffold & Backend Skeleton
+Date: 2026-05-27
+--------------------------------------------------------------------------------
+
+OVERVIEW
+--------
+Built the full project skeleton for BruinPath, a UCLA degree planning assistant.
+The app lets students upload their transcript and Degree Audit Report (DAR) to
+receive a personalized quarter-by-quarter graduation plan.
+
+DIRECTORY STRUCTURE CREATED
+-----------------------------
+bruinpath/
+  frontend/              Next.js 15 app (TypeScript + Tailwind CSS)
+  backend/               FastAPI app (Python 3.12)
+    app/
+      main.py            App entry point, CORS middleware, router registration
+      config.py          Pydantic settings (reads from .env)
+      routers/           One file per route group
+        health.py        GET /health
+        majors.py        GET /majors
+        parse.py         POST /parse-transcript, POST /parse-dar
+        audit.py         POST /audit
+        plan.py          POST /generate-plan
+      services/          Business logic layer
+        transcript_parser.py   PDF -> TranscriptResponse (PyMuPDF / pdfplumber)
+        dar_parser.py          PDF -> DARResponse (PyMuPDF / pdfplumber)
+        audit_engine.py        Rule-based requirements auditor
+        plan_engine.py         Quarter-by-quarter plan generator
+      models/
+        schemas.py       All Pydantic request/response models
+    requirements.txt     fastapi, uvicorn, sqlalchemy, asyncpg, alembic,
+                         pymupdf, pdfplumber, python-multipart, httpx, etc.
+    Dockerfile           python:3.12-slim, uvicorn --reload
+    .env.example         DATABASE_URL, ENVIRONMENT
+  data/
+    sample_transcripts/  (empty — drop real PDFs here to tune parsers)
+    sample_dars/         (empty — drop real PDFs here to tune parsers)
+  docs/
+    devlog.txt           This file
+  docker-compose.yml     Wires postgres:16, backend, frontend with named volume
+  README.md              Stack table, API route table, run instructions
+  .gitignore             Python, Node, OS, IDE, secrets
+
+BACKEND ROUTES IMPLEMENTED
+---------------------------
+GET  /health
+  - Returns {"status": "ok"}
+  - Used for uptime checks and Docker healthchecks
+
+GET  /majors
+  - Returns list of Major objects (id, name, department, total_units, description)
+  - Currently returns 4 stub majors (CS, Math, Econ, Stats)
+  - Intended to be backed by a DB table once schema is set up
+
+POST /parse-transcript  (multipart/form-data, field: file)
+  - Accepts a UCLA transcript PDF (up to 20 MB)
+  - Extracts text using PyMuPDF (preferred) or pdfplumber as fallback
+  - Applies regex heuristics to pull: student name, major, cumulative GPA,
+    and a list of courses (course_id, title, units, grade, term)
+  - Returns ParseTranscriptResponse
+  - Note: regex patterns are heuristic and will need tuning against real samples
+
+POST /parse-dar  (multipart/form-data, field: file)
+  - Accepts a UCLA Degree Audit Report PDF
+  - Extracts text and applies regex to identify requirement blocks
+  - Each block yields: category, requirement name, status (complete/in_progress/
+    incomplete), units_required, units_applied
+  - Returns ParseDARResponse
+
+POST /audit  (JSON body: AuditRequest)
+  - Takes a parsed transcript + parsed DAR
+  - Rule engine checks each DAR requirement against the set of completed courses
+    (courses with a passing grade: not F, NP, W, or I)
+  - Splits results into passed / pending / failed lists
+  - Computes overall completion_percentage
+  - Returns AuditResponse
+
+POST /generate-plan  (JSON body: PlanRequest)
+  - Takes a parsed transcript + parsed DAR + optional target graduation term
+    and max units per quarter (default 20)
+  - Identifies all unmet requirements and their missing courses
+  - Determines the next quarter after the student's last recorded term
+  - Greedily packs courses into quarters respecting the unit cap
+  - Returns list of QuarterPlan objects and an estimated graduation term
+
+FRONTEND
+---------
+- Bootstrapped with create-next-app (Next.js 15, TypeScript, Tailwind, App Router)
+- Replaced default page.tsx with a BruinPath landing page:
+    - Gradient hero with app name and tagline
+    - 3-step visual guide (Upload Transcript -> Upload DAR -> Get Plan)
+    - "Get Started" CTA button linking to /plan (route not yet built)
+- Created src/lib/api.ts: typed fetch wrapper for all 6 backend routes
+
+INFRASTRUCTURE
+--------------
+- docker-compose.yml defines three services:
+    db:        postgres:16-alpine, port 5432, named volume postgres_data
+    backend:   builds from ./backend, port 8000, depends on db
+    frontend:  builds from ./frontend, port 3000, depends on backend
+- Multi-stage Dockerfile for frontend (deps -> builder -> runner)
+- Single-stage Dockerfile for backend (python:3.12-slim, uvicorn reload)
+
+VERIFICATION
+------------
+- Installed all Python dependencies into backend/.venv
+- Imported app.main and confirmed all 10 routes registered correctly
+  (/openapi.json, /docs, /docs/oauth2-redirect, /redoc, + the 6 app routes)
+- Ran uvicorn locally and curl-tested:
+    GET /health  -> {"status":"ok"}
+    GET /majors  -> JSON array of 4 majors
+
+KNOWN GAPS / NEXT STEPS
+------------------------
+- PDF parsers use heuristic regex — need real UCLA transcript/DAR samples
+  in data/ to measure accuracy and refine patterns
+- No database migrations yet — Alembic is installed but no models or
+  migration files exist; DB is not required to run the API today
+- /plan route on the frontend is a dead link — needs its own page built
+- Majors list is hardcoded stub — should be seeded into Postgres
+- No authentication layer yet
+- No tests yet (unit tests for audit_engine and plan_engine are the priority)
+- Pylance warnings in main.py are a false alarm — the venv is at
+  backend/.venv and the IDE interpreter may not be pointed at it;
+  the app imports and runs correctly
+
+================================================================================
